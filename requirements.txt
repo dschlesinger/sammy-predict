@@ -1,0 +1,6 @@
+torch
+torchmetrics
+torchvision
+numpy
+pandas
+pydicom
