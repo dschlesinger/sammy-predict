@@ -56,7 +56,7 @@ A convolutional neural network (CNN) is used to classify images.
 
 Sawyer-Lee, R., Gimenez, F., Hoogi, A., & Rubin, D. (2016). Curated Breast Imaging Subset of Digital Database for Screening Mammography (CBIS-DDSM) [Data set]. The Cancer Imaging Archive. [https://doi.org/10.7937/K9/TCIA.2016.7O02S9CY](https://doi.org/10.7937/K9/TCIA.2016.7O02S9CY)
 
-Moreira, I. C., Amaral, I., Domingues, I., Cardoso, A., Cardoso, M. J., & Cardoso, J. S. (2012). INbreast: Toward a full-field digital mammographic database. Academic Radiology, 19(2), 236–248. [https://doi.org/10.1016/j.acra.2011.09.014](https://doi.org/10.1016/j.acra.2011.09.014)
+Moreira, I. C., Amaral, I., Domingues, I., Cardoso, A., Cardoso, M. J., & Cardoso, J. S. (2012). INbreast: Toward a full-field digital mammographic database [Data set]. Academic Radiology, 19(2), 236–248. [https://doi.org/10.1016/j.acra.2011.09.014](https://doi.org/10.1016/j.acra.2011.09.014)
 
 # Contact
 
