@@ -91,8 +91,6 @@ Labels CSV \n{DATA_CSV[[IMAGE_PATH_COL, VIEW_COL]].head(5)}
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.Grayscale(num_output_channels=1),
-    transforms.RandomVerticalFlip(p=0.5),
-    transforms.RandomRotation(degrees=(-20, 20)),
     transforms.ToTensor(),
     transforms.Lambda(lambda i: i / i.max()),
 ])
