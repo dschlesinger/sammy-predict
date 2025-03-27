@@ -57,23 +57,30 @@ def color_score(s: float):
         case _:
             return Color.GREEN.apply
 
+root = "../view-prediction"                                                                                   # <--------- Replace with your csv for labels pd.DataFrame
+csv_path = "CBIS-DDSM/csv/dicom_info.csv"
+img_path = "CBIS-DDSM/jpeg"
+
 # Settings, INBreast example replace with your own
-MODEL_PATH: str = "SAMMY.pt"
-IMG_FOLDER: str = "INBreast/ALL-IMGS"                                                           # <--------- Replace with your Folder for images or list of image paths
-DATA_CSV: str = pd.read_excel("INBreast/INbreast.xls", dtype=str)                               # <--------- Replace with your csv for labels pd.DataFrame
-IMAGE_PATH_COL: str = "File Name"                                                               # <--------- Column for associating images w entries
-IMAGE_COL_FIND: Callable = lambda image_col_path, file: image_col_path == file.split("_")[0]    # <--------- If Image Column not exactly file name, None if Image Col == File Name
-                                                                                                #            Example uses file id in name which is id_info.dcm
-VIEW_COL: str = "View"                                                                          # <--------- Column to get label, 'CC' or 'MLO'
-MODE: Literal["predict", "evaluate"] = "evaluate"                                               # <--------- Predict: Saves predictions to predictions.csv, Evaluate: prints stats
-                                                                                                #            Saves to predictions.csv
-EVAL_METRICS = [                                                                                # <--------- Metrics printed for evaluation, add torchmetrics or loss
+MODEL_PATH: str = "SAMMY.pt"                                                                                            
+DATA_CSV: str = pd.read_csv(f"{root}/{csv_path}", dtype=str)                                                    # <--------- Replace with your csv for labels pd.DataFrame
+IMG_FOLDER: str = list(map(lambda s: f"{root}/{s}",                                                         
+                           DATA_CSV[DATA_CSV['SeriesDescription'] == 'full mammogram images']['image_path'].tolist()))  # <--------- Replace with your Folder for images or list of image paths
+IMAGE_PATH_COL: str = "image_path"                                                                                      # <--------- Column for associating images w entries
+IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == '/'.join(file.split('/')[2:])       # <--------- If Image Column not exactly file name, None if Image Col == File Name
+                                                                                                                        #            Example uses file id in name which is id_info.dcm
+VIEW_COL: str = "PatientOrientation"                                                                                    # <--------- Column to get label, 'CC' or 'MLO'
+PATIENT_ID_COL: str = 'PatientID'                                                                                       # <--------- Patient id column
+PATIENT_ID_FUNC: Callable = lambda p: '_'.join(p.split('_')[1:3])                                                       # <--------- Function to find patient id in column if contains more info 
+MODE: Literal["predict", "evaluate"] = "evaluate"                                                                        # <--------- Predict: Saves predictions to predictions.csv, Evaluate: prints stats
+                                                                                                                        #            Saves to predictions.csv
+EVAL_METRICS = [                                                                                                        # <--------- Metrics printed for evaluation, add torchmetrics or loss
     classification.Accuracy(task="multiclass", num_classes=2),
     classification.AUROC(task="multiclass", num_classes=2),
     torch.nn.CrossEntropyLoss(),
 ]
 SUPPORTED_FILE_TYPES: Set[str] = {"dcm", "jpeg", "jpg", "png", "webp"}
-raise NotImplementedError(Color.RED.apply("Make your changes here!!!"))
+#raise NotImplementedError(Color.RED.apply("Make your changes here!!!"))
 
 # Checks that Evaluate mode can find labels
 assert MODE != "evaluate" or not (DATA_CSV is None or IMAGE_PATH_COL is None or VIEW_COL is None), Color.RED.apply("Evaluate Mode cannot run labels DF not fully informed")
@@ -81,7 +88,7 @@ assert MODE != "evaluate" or not (DATA_CSV is None or IMAGE_PATH_COL is None or 
 print(
 Color.BLUE.apply(f"""
 In {MODE.capitalize()} Mode
-Image Folder {IMG_FOLDER}
+Image Folder {IMG_FOLDER if isinstance(IMG_FOLDER, str) else "is a List"}
 Labels CSV \n{DATA_CSV[[IMAGE_PATH_COL, VIEW_COL]].head(5)}
 """
 ))
@@ -113,6 +120,7 @@ def load_image(img_path: str, skip_missing: bool = False) -> Union[torch.Tensor,
     Returns:
         torch.Tensor: Resized, Grayscaled, and Normalized Image
     """
+
     # Checks if path is valid
     if not os.path.exists(img_path):
 
@@ -137,7 +145,7 @@ def load_image(img_path: str, skip_missing: bool = False) -> Union[torch.Tensor,
         case "jpg" | "jpeg" | "png" | "webp":
 
             return transform(
-                Image.open(img_path).load()
+                Image.open(img_path)
             )
         
         case _:
@@ -168,6 +176,10 @@ class EagerLoader(Dataset):
         images = []
         labels = []
 
+        if PATIENT_ID_COL:
+
+            pid = []
+
         self.img_paths_ = list(filter(lambda x: x.split(".")[-1] in SUPPORTED_FILE_TYPES, os.listdir(self.path))) if isinstance(self.path, str) else self.path
 
         l = self.img_paths_.__len__()
@@ -186,13 +198,14 @@ class EagerLoader(Dataset):
 
                 continue
 
+            found_row = DATA_CSV[DATA_CSV[IMAGE_PATH_COL].apply(str).apply(IMAGE_COL_FIND, args=(ipath, DATA_CSV))] if IMAGE_COL_FIND is not None else DATA_CSV[DATA_CSV[IMAGE_PATH_COL] == ipath]
+
             if MODE == "evaluate":
 
-                found_row = DATA_CSV[DATA_CSV[IMAGE_PATH_COL].apply(str).apply(IMAGE_COL_FIND, args=(ipath,))] if IMAGE_COL_FIND is not None else DATA_CSV[DATA_CSV[IMAGE_PATH_COL] == ipath]
 
                 if found_row.empty:
 
-                    continue
+                    raise Exception(f"Row not found {ipath}")
 
                 labels.append(
                     [0, 1] if \
@@ -203,12 +216,25 @@ class EagerLoader(Dataset):
             else:
 
                 labels.append(None)
-            
+
+            if PATIENT_ID_COL:
+
+                pid.append(
+                    PATIENT_ID_FUNC(found_row.iloc[0][PATIENT_ID_COL])
+                )
+
+            path_to_img: str = self.path + '/' + ipath if isinstance(self.path, str) else ipath
+
             images.append(
-                load_image(self.path + '/' + ipath).to(torch.float32)
+
+                load_image(path_to_img).to(torch.float32)
             )
 
         self.images = torch.unsqueeze(torch.concat(images), -1).permute((0,3,1,2))
+
+        if PATIENT_ID_COL:
+
+            self.pid = pid
 
         if MODE == "evaluate":
 
@@ -223,18 +249,21 @@ class EagerLoader(Dataset):
 
     def __getitem__(self, idx):
 
-        return torch.Tensor(self.images[idx]), torch.Tensor(self.labels[idx])
+        return torch.Tensor(self.images[idx]), torch.Tensor(self.labels[idx]), self.pid[idx] if PATIENT_ID_COL else None
 
 # Custom Dataset functionality for Less Memory Overhead
 class LazyLoader(Dataset):
 
     def __init__(self, path: Union[str, List[str]] = IMG_FOLDER) -> None:
-        """Loads Images Eagerly, saved to memory \n
+        """**Will not work Depricated**\n
+        Loads Images Eagerly, saved to memory \n
         Slower init Faster use, high memory overhead
 
         Args:
             path (Union[str, List[str]]): Either string path to directory of images or list of paths to individual images
         """
+
+        raise DeprecationWarning("Lazy Loader is not up to date")
 
         self.path = path
 
@@ -344,6 +373,10 @@ if __name__ == "__main__":
 
     y_pred = []
     y_true = []
+    t_patient_ids = []
+
+    # Stores indexs of patient
+    pateint_wise_info = {}
 
     print("Predicting View...")
 
@@ -359,9 +392,16 @@ if __name__ == "__main__":
                 end=''
             )
 
-            x, y = batch 
+            x, y, pid = batch 
 
             preds = model(x)
+
+            if PATIENT_ID_COL:
+                for i, (prd, pid_) in enumerate(zip(preds, pid)):
+
+                    pateint_wise_info[pid] = pateint_wise_info.get(pid, []) + [x.__len__() + i]
+
+            t_patient_ids.extend(pid)
             
             y_pred.extend(preds.tolist()) 
             if MODE == "evaluate":
@@ -383,37 +423,68 @@ if __name__ == "__main__":
                 Color.MAGENTA.apply(f"{m.__class__.__name__}: "),
                 color_score(score)(f"{score:.4}")
             )
+
+        if PATIENT_ID_COL:
+
+            # Evaluate Patient wise Accuracy
+
+            patient_correct = 0
+
+            patient_total = pateint_wise_info.__len__()
+
+            for patient, indexs in pateint_wise_info.items():
+
+                for i in indexs:
+
+                    if np.argmax(y_pred[i]) == y_true[i]:
+
+                        continue
+
+                    break
+                else:
+
+                    patient_correct += 1
+
+            print(
+                Color.MAGENTA.apply(f"Patient Wise Accuracy: "),
+                color_score(patient_correct / patient_total)(f"{patient_correct / patient_total:.4}")
+            )
     
-    else: # Predict
 
-        # Save predictions
+    Predictions = pd.DataFrame(
+        columns={
+            "File": str,
+            "Laterality": str,
+            "ViewPred": str,
+        } | ({"PatientID": str} if PATIENT_ID_COL else {}) | ({"ViewTrue": str} if MODE == "evaluate" else {})
+    )
 
-        Predictions = pd.DataFrame(
-            columns={
-                "File": str,
-                "Laterality": str,
-                "View": str,
-            }
-        )
+    Predictions['File'] = pd.Series(data.img_paths_)
 
-        Predictions['File'] = pd.Series(data.img_paths_)
+    Predictions['ViewPred'] = pd.Series(['CC' if yp == 0 else 'MLO' for yp in torch.argmax(y_pred, dim=1)])
 
-        Predictions['View'] = pd.Series(['CC' if yp == 0 else 'MLO' for yp in torch.argmax(y_pred, dim=1)])
+    if PATIENT_ID_COL:
 
-        print("Predicting Laterality...")
+        Predictions["PatientID"] = pd.Series(t_patient_ids)
 
-        lat_pred = []
+    if MODE == "evaluate":
 
-        # Get Laterallity
-        for batch in data_loader:
-            x, y = batch
+        Predictions["ViewTrue"] = pd.Series(['CC' if yt == 0 else 'MLO' for yt in y_true])
 
-            lat = laterality(x)
-            
-            lat_pred.extend(torch.argmax(lat, dim=1).tolist())
+    print("Predicting Laterality...")
 
-        Predictions['Laterality'] = pd.Series(['L' if lp == 0 else 'R' for lp in lat_pred])
+    lat_pred = []
 
-        print("Saving...")
+    # Get Laterallity
+    for batch in data_loader:
+        x, y, pid = batch
 
-        Predictions.to_csv('predictions.csv', index=False)
+        lat = laterality(x)
+        
+        lat_pred.extend(torch.argmax(lat, dim=1).tolist())
+
+    Predictions['Laterality'] = pd.Series(['L' if lp == 0 else 'R' for lp in lat_pred])
+
+    print("Saving...")
+
+    Predictions.to_csv('evaluation.csv' if MODE == 'evaluate' else 'predictions.csv', index=False)
