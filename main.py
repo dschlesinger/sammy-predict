@@ -57,21 +57,21 @@ def color_score(s: float):
         case _:
             return Color.GREEN.apply
 
-root = "../view-prediction"                                                                                   # <--------- Replace with your csv for labels pd.DataFrame
-csv_path = "CBIS-DDSM/csv/dicom_info.csv"
-img_path = "CBIS-DDSM/jpeg"
+root = "MammosToReview"                                                                                   # <--------- Replace with your csv for labels pd.DataFrame
+csv_path = "subset_predictions.csv"
+img_path = ""
 
 # Settings, INBreast example replace with your own
 MODEL_PATH: str = "SAMMY.pt"                                                                                            
 DATA_CSV: str = pd.read_csv(f"{root}/{csv_path}", dtype=str)                                                    # <--------- Replace with your csv for labels pd.DataFrame
 IMG_FOLDER: str = list(map(lambda s: f"{root}/{s}",                                                         
-                           DATA_CSV[DATA_CSV['SeriesDescription'] == 'full mammogram images']['image_path'].tolist()))  # <--------- Replace with your Folder for images or list of image paths
-IMAGE_PATH_COL: str = "image_path"                                                                                      # <--------- Column for associating images w entries
-IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == '/'.join(file.split('/')[2:])       # <--------- If Image Column not exactly file name, None if Image Col == File Name
+                           (DATA_CSV['study_id'] + '/' + DATA_CSV['file']).tolist()))  # <--------- Replace with your Folder for images or list of image paths
+IMAGE_PATH_COL: str = "file"                                                                                      # <--------- Column for associating images w entries
+IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == file.split('/')[-1]       # <--------- If Image Column not exactly file name, None if Image Col == File Name
                                                                                                                         #            Example uses file id in name which is id_info.dcm
-VIEW_COL: str = "PatientOrientation"                                                                                    # <--------- Column to get label, 'CC' or 'MLO'
-PATIENT_ID_COL: str = 'PatientID'                                                                                       # <--------- Patient id column
-PATIENT_ID_FUNC: Callable = lambda p: '_'.join(p.split('_')[1:3])                                                       # <--------- Function to find patient id in column if contains more info 
+VIEW_COL: str = "View Position"                                                                                    # <--------- Column to get label, 'CC' or 'MLO'
+PATIENT_ID_COL: str = 'study_id'                                                                                       # <--------- Patient id column
+PATIENT_ID_FUNC: Callable = None # lambda p: '_'.join(p.split('_')[1:3])                                                       # <--------- Function to find patient id in column if contains more info 
 MODE: Literal["predict", "evaluate"] = "evaluate"                                                                        # <--------- Predict: Saves predictions to predictions.csv, Evaluate: prints stats
                                                                                                                         #            Saves to predictions.csv
 EVAL_METRICS = [                                                                                                        # <--------- Metrics printed for evaluation, add torchmetrics or loss
@@ -79,7 +79,7 @@ EVAL_METRICS = [                                                                
     classification.AUROC(task="multiclass", num_classes=2),
     torch.nn.CrossEntropyLoss(),
 ]
-SUPPORTED_FILE_TYPES: Set[str] = {"dcm", "jpeg", "jpg", "png", "webp"}
+SUPPORTED_FILE_TYPES: Set[str] = {"dcm", "jpeg", "jpg", "png", "webp", "dicom"}
 #raise NotImplementedError(Color.RED.apply("Make your changes here!!!"))
 
 # Checks that Evaluate mode can find labels
@@ -136,7 +136,7 @@ def load_image(img_path: str, skip_missing: bool = False) -> Union[torch.Tensor,
     match file_type:
 
         # Dicom
-        case "dcm":
+        case "dcm" | "dicom":
 
             return transform(
                 Image.fromarray(pydicom.dcmread(img_path).pixel_array)
@@ -202,7 +202,6 @@ class EagerLoader(Dataset):
 
             if MODE == "evaluate":
 
-
                 if found_row.empty:
 
                     raise Exception(f"Row not found {ipath}")
@@ -220,7 +219,7 @@ class EagerLoader(Dataset):
             if PATIENT_ID_COL:
 
                 pid.append(
-                    PATIENT_ID_FUNC(found_row.iloc[0][PATIENT_ID_COL])
+                    PATIENT_ID_FUNC(found_row.iloc[0][PATIENT_ID_COL]) if PATIENT_ID_FUNC else found_row.iloc[0][PATIENT_ID_COL]
                 )
 
             path_to_img: str = self.path + '/' + ipath if isinstance(self.path, str) else ipath
@@ -399,7 +398,7 @@ if __name__ == "__main__":
             if PATIENT_ID_COL:
                 for i, (prd, pid_) in enumerate(zip(preds, pid)):
 
-                    pateint_wise_info[pid] = pateint_wise_info.get(pid, []) + [x.__len__() + i]
+                    pateint_wise_info[pid] = pateint_wise_info.get(pid, []) + [y_pred.__len__() + i]
 
             t_patient_ids.extend(pid)
             
