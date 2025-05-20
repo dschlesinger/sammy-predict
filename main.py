@@ -6,7 +6,7 @@ IMG_FOLDER -> Path to folder with images,
 
 """
 # Python imports
-from typing import Literal, Tuple, List, Set, Union, Callable
+from typing import *
 from enum import Enum
 import os, sys
 
@@ -57,21 +57,21 @@ def color_score(s: float):
         case _:
             return Color.GREEN.apply
 
-root = "../view-prediction"                                                                                   # <--------- Replace with your csv for labels pd.DataFrame
-csv_path = "CBIS-DDSM/csv/dicom_info.csv"
-img_path = "CBIS-DDSM/jpeg"
+root = "./"                                                                                   # <--------- Replace with your csv for labels pd.DataFrame
+csv_path = "INBreast/INbreast.xls"
+img_path = "INBreast/ALL-IMGS"
 
 # Settings, INBreast example replace with your own
-MODEL_PATH: str = "SAMMY.pt"                                                                                            
-DATA_CSV: str = pd.read_csv(f"{root}/{csv_path}", dtype=str)                                                    # <--------- Replace with your csv for labels pd.DataFrame
-IMG_FOLDER: str = list(map(lambda s: f"{root}/{s}",                                                         
-                           DATA_CSV[DATA_CSV['SeriesDescription'] == 'full mammogram images']['image_path'].tolist()))  # <--------- Replace with your Folder for images or list of image paths
-IMAGE_PATH_COL: str = "image_path"                                                                                      # <--------- Column for associating images w entries
-IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == '/'.join(file.split('/')[2:])       # <--------- If Image Column not exactly file name, None if Image Col == File Name
-                                                                                                                        #            Example uses file id in name which is id_info.dcm
-VIEW_COL: str = "PatientOrientation"                                                                                    # <--------- Column to get label, 'CC' or 'MLO'
-PATIENT_ID_COL: str = 'PatientID'                                                                                       # <--------- Patient id column
-PATIENT_ID_FUNC: Callable = lambda p: '_'.join(p.split('_')[1:3])                                                       # <--------- Function to find patient id in column if contains more info 
+MODEL_PATH: str = "models/SAMMY.pt"                                                                                            
+DATA_CSV: str = pd.read_excel(f"{root}/{csv_path}", dtype=str)                                        # <--------- Replace with your data for labels pd.DataFrame
+IMG_FOLDER: str | List[str] = img_path  # <--------- Replace with your Folder for images or list of image paths
+IMAGE_PATH_COL: str = "File Name"                                                                                      # <--------- Column for associating images w entries
+IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == file.split('_')[0].split('/')[-1]       # <--------- If Image Column not exactly file name, None if Image Col == File Name
+# Example: lambda image_col_path, file, DATA_CSV: image_col_path == '/'.join(file.split('/')[2:])                       #            Example uses file id in name which is id_info.dcm
+
+VIEW_COL: str = "View"                                                                                    # <--------- Column to get label, 'CC' or 'MLO'
+PATIENT_ID_COL: str | bool = "File Name"                                                                                       # <--------- Patient id column
+PATIENT_ID_FUNC: Callable = lambda path, row: path.split('_')[1]                                                    # <--------- Function to find patient id in column if contains more info 
 MODE: Literal["predict", "evaluate"] = "evaluate"                                                                        # <--------- Predict: Saves predictions to predictions.csv, Evaluate: prints stats
                                                                                                                         #            Saves to predictions.csv
 EVAL_METRICS = [                                                                                                        # <--------- Metrics printed for evaluation, add torchmetrics or loss
@@ -220,7 +220,7 @@ class EagerLoader(Dataset):
             if PATIENT_ID_COL:
 
                 pid.append(
-                    PATIENT_ID_FUNC(found_row.iloc[0][PATIENT_ID_COL])
+                    PATIENT_ID_FUNC(ipath, found_row.iloc[0][PATIENT_ID_COL])
                 )
 
             path_to_img: str = self.path + '/' + ipath if isinstance(self.path, str) else ipath
@@ -424,6 +424,81 @@ if __name__ == "__main__":
                 color_score(score)(f"{score:.4}")
             )
 
+    Predictions = pd.DataFrame(
+        columns={
+            "File": str,
+            "Laterality": str,
+            "ViewPred": str,
+        } | ({"PatientID": str} if PATIENT_ID_COL else {}) | ({"ViewTrue": str} if MODE == "evaluate" else {})
+    )
+
+    Predictions['File'] = pd.Series(data.img_paths_)
+
+    Predictions['ViewPred'] = pd.Series(['CC' if yp == 0 else 'MLO' for yp in torch.argmax(y_pred, dim=1)])
+
+    if MODE == "evaluate":
+
+        Predictions["ViewTrue"] = pd.Series(['CC' if yt == 0 else 'MLO' for yt in y_true])
+
+        Predictions['P_CC'] = pd.Series(y_pred[:, 0].tolist())
+
+        Predictions['P_MLO'] = pd.Series(y_pred[:, 1].tolist())
+
+    print("Predicting Laterality...")
+
+    lat_pred = []
+
+    # Get Laterallity
+    for batch in data_loader:
+        x, y, pid = batch
+
+        lat = laterality(x)
+        
+        lat_pred.extend(torch.argmax(lat, dim=1).tolist())
+
+    Predictions['Laterality'] = pd.Series(['L' if lp == 0 else 'R' for lp in lat_pred])
+    
+    if PATIENT_ID_COL:
+
+        print("Correcting by Patient Laterality")
+
+        Predictions["PatientID"] = pd.Series(t_patient_ids)
+
+        # All patient
+        all_patients = Predictions["PatientID"].unique()
+
+        Predictions['CorrectedByPatient'] = False 
+
+        for patient in all_patients:
+
+            # Get patient entries
+            entries = Predictions[Predictions['PatientID'] == patient].copy()
+
+            # If not 4 entries will not work
+            if entries.__len__() != 4: continue
+
+            # Should not happen but will also not work, Laterality must be 2 lefts and 2 rights
+            if (slats := sorted(entries['Laterality'].tolist())) != ['L', 'L', 'R', 'R']:
+                print(slats)
+                continue
+
+            for direction in ['L', 'R']:
+
+                # Get rows
+                check = entries[entries['Laterality'] == direction].copy()
+
+                # If not in agreement
+                if (vp := sorted(check['ViewPred'].unique())) != ['CC', 'MLO']:
+
+                    view_check = 'P_CC' if check['ViewPred'].iloc[0] == 'CC' else 'P_MLO'
+
+                    # Which one is wrong
+                    wrong_index = 1 if check[view_check].iloc[0] > check[view_check].iloc[1] else 0
+
+                    # Correct and track
+                    check.loc[wrong_index, 'ViewPred'] = 'MLO' if check['ViewPred'].iloc[0] == 'CC' else 'CC'
+                    check.loc[wrong_index, 'ViewPred'] = True
+
         if PATIENT_ID_COL:
 
             # Evaluate Patient wise Accuracy
@@ -449,41 +524,6 @@ if __name__ == "__main__":
                 Color.MAGENTA.apply(f"Patient Wise Accuracy: "),
                 color_score(patient_correct / patient_total)(f"{patient_correct / patient_total:.4}")
             )
-    
-
-    Predictions = pd.DataFrame(
-        columns={
-            "File": str,
-            "Laterality": str,
-            "ViewPred": str,
-        } | ({"PatientID": str} if PATIENT_ID_COL else {}) | ({"ViewTrue": str} if MODE == "evaluate" else {})
-    )
-
-    Predictions['File'] = pd.Series(data.img_paths_)
-
-    Predictions['ViewPred'] = pd.Series(['CC' if yp == 0 else 'MLO' for yp in torch.argmax(y_pred, dim=1)])
-
-    if PATIENT_ID_COL:
-
-        Predictions["PatientID"] = pd.Series(t_patient_ids)
-
-    if MODE == "evaluate":
-
-        Predictions["ViewTrue"] = pd.Series(['CC' if yt == 0 else 'MLO' for yt in y_true])
-
-    print("Predicting Laterality...")
-
-    lat_pred = []
-
-    # Get Laterallity
-    for batch in data_loader:
-        x, y, pid = batch
-
-        lat = laterality(x)
-        
-        lat_pred.extend(torch.argmax(lat, dim=1).tolist())
-
-    Predictions['Laterality'] = pd.Series(['L' if lp == 0 else 'R' for lp in lat_pred])
 
     print("Saving...")
 
