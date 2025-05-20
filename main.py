@@ -1,9 +1,5 @@
 """
 Script to predict the view and laterality of a unlabeled Mammography
-
-IMG_FOLDER -> Path to folder with images,
-    no sub folders takes Dicom, JPEG
-
 """
 # Python imports
 from typing import *
@@ -57,22 +53,24 @@ def color_score(s: float):
         case _:
             return Color.GREEN.apply
 
-root = "./"                                                                                   # <--------- Replace with your csv for labels pd.DataFrame
+root = "./"                                                                                                            # <--------- Replace with your csv for labels pd.DataFrame
 csv_path = "INBreast/INbreast.xls"
 img_path = "INBreast/ALL-IMGS"
 
-# Settings, INBreast example replace with your own
-MODEL_PATH: str = "models/SAMMY.pt"                                                                                            
-DATA_CSV: str = pd.read_excel(f"{root}/{csv_path}", dtype=str)                                        # <--------- Replace with your data for labels pd.DataFrame
-IMG_FOLDER: str | List[str] = img_path  # <--------- Replace with your Folder for images or list of image paths
-IMAGE_PATH_COL: str = "File Name"                                                                                      # <--------- Column for associating images w entries
-IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == file.split('_')[0].split('/')[-1]       # <--------- If Image Column not exactly file name, None if Image Col == File Name
-# Example: lambda image_col_path, file, DATA_CSV: image_col_path == '/'.join(file.split('/')[2:])                       #            Example uses file id in name which is id_info.dcm
 
-VIEW_COL: str = "View"                                                                                    # <--------- Column to get label, 'CC' or 'MLO'
-PATIENT_ID_COL: str | bool = "File Name"                                                                                       # <--------- Patient id column
-PATIENT_ID_FUNC: Callable = lambda path, row: path.split('_')[1]                                                    # <--------- Function to find patient id in column if contains more info 
-MODE: Literal["predict", "evaluate"] = "evaluate"                                                                        # <--------- Predict: Saves predictions to predictions.csv, Evaluate: prints stats
+# Settings, INBreast example replace with your own, Docs -> 
+MODEL_PATH: str = "models/SAMMY.pt"                                                                                            
+DATA_CSV: str = pd.read_excel(f"{root}/{csv_path}", dtype=str)                                                         # <--------- Replace with your data for labels pd.DataFrame
+IMG_FOLDER: str | List[str] = img_path                                                                                 # <--------- Replace with your Folder for images or list of image paths
+IMAGE_PATH_COL: str = "File Name"                                                                                      # <--------- Column for associating images w entries
+IMAGE_COL_FIND: Callable = lambda image_col_path, file, DATA_CSV: image_col_path == file.split('_')[0].split('/')[-1]  # <--------- If Image Column not exactly file name, None if Image Col == File Name
+# Example: lambda image_col_path, file, DATA_CSV: image_col_path == '/'.join(file.split('/')[2:])                      #            Example uses file id in name which is id_info.dcm
+
+VIEW_COL: str = "View"                                                                                                  # <--------- Column to get label, 'CC' or 'MLO'
+PATIENT_ID_COL: str | bool = "File Name"                                                                                # <--------- Patient id column
+PATIENT_ID_FUNC: Callable = lambda path, row: path.split('_')[1]                                                        # <--------- Function to find patient id in column if contains more info 
+# Example: lambda path, row: path.split('_')[1]
+MODE: Literal["predict", "evaluate"] = "evaluate"                                                                       # <--------- Predict: Saves predictions to predictions.csv, Evaluate: prints stats
                                                                                                                         #            Saves to predictions.csv
 EVAL_METRICS = [                                                                                                        # <--------- Metrics printed for evaluation, add torchmetrics or loss
     classification.Accuracy(task="multiclass", num_classes=2),
@@ -415,6 +413,8 @@ if __name__ == "__main__":
 
         # Add your metrics here V
 
+        print('Pre correction evaluation...')
+
         for m in EVAL_METRICS:
             
             score = m(y_pred, y_true)
@@ -423,6 +423,33 @@ if __name__ == "__main__":
                 Color.MAGENTA.apply(f"{m.__class__.__name__}: "),
                 color_score(score)(f"{score:.4}")
             )
+
+        if PATIENT_ID_COL:
+
+            # Evaluate Patient wise Accuracy
+
+            patient_correct = 0
+
+            patient_total = pateint_wise_info.__len__()
+
+            for patient, indexs in pateint_wise_info.items():
+
+                for i in indexs:
+
+                    if np.argmax(y_pred[i]) == y_true[i]:
+
+                        continue
+
+                    break
+                else:
+
+                    patient_correct += 1
+
+            print(
+                Color.MAGENTA.apply(f"Patient Wise Accuracy: "),
+                color_score(patient_correct / patient_total)(f"{patient_correct / patient_total:.4}")
+            )
+
 
     Predictions = pd.DataFrame(
         columns={
@@ -460,7 +487,7 @@ if __name__ == "__main__":
     
     if PATIENT_ID_COL:
 
-        print("Correcting by Patient Laterality")
+        print("Correcting by Patient Laterality...")
 
         Predictions["PatientID"] = pd.Series(t_patient_ids)
 
@@ -472,20 +499,19 @@ if __name__ == "__main__":
         for patient in all_patients:
 
             # Get patient entries
-            entries = Predictions[Predictions['PatientID'] == patient].copy()
+            entries = Predictions[Predictions['PatientID'] == patient]
 
             # If not 4 entries will not work
             if entries.__len__() != 4: continue
 
             # Should not happen but will also not work, Laterality must be 2 lefts and 2 rights
             if (slats := sorted(entries['Laterality'].tolist())) != ['L', 'L', 'R', 'R']:
-                print(slats)
                 continue
 
             for direction in ['L', 'R']:
 
                 # Get rows
-                check = entries[entries['Laterality'] == direction].copy()
+                check = Predictions[(Predictions['Laterality'] == direction) & (Predictions['PatientID'] == patient)]
 
                 # If not in agreement
                 if (vp := sorted(check['ViewPred'].unique())) != ['CC', 'MLO']:
@@ -493,38 +519,36 @@ if __name__ == "__main__":
                     view_check = 'P_CC' if check['ViewPred'].iloc[0] == 'CC' else 'P_MLO'
 
                     # Which one is wrong
-                    wrong_index = 1 if check[view_check].iloc[0] > check[view_check].iloc[1] else 0
+                    wrong_index = check.iloc[1 if check[view_check].iloc[0] > check[view_check].iloc[1] else 0].name
 
                     # Correct and track
-                    check.loc[wrong_index, 'ViewPred'] = 'MLO' if check['ViewPred'].iloc[0] == 'CC' else 'CC'
-                    check.loc[wrong_index, 'ViewPred'] = True
+                    Predictions.loc[wrong_index, 'ViewPred'] = 'MLO' if check['ViewPred'].iloc[0] == 'CC' else 'CC'
+                    Predictions.loc[wrong_index, 'CorrectedByPatient'] = True
 
         if PATIENT_ID_COL:
 
+            print('Post correction Evaluation...')
+
+            correct = (Predictions[Predictions['ViewPred'] == Predictions['ViewTrue']]).__len__()
+
+            acc = correct / Predictions.__len__()
+
+            print(
+                Color.MAGENTA.apply(f"Accuracy: "),
+                color_score(acc)(f"{acc:.4}")
+            )
+
             # Evaluate Patient wise Accuracy
 
-            patient_correct = 0
+            num_patient_wrong = (Predictions[Predictions['ViewPred'] != Predictions['ViewTrue']])['PatientID'].unique().__len__()
 
-            patient_total = pateint_wise_info.__len__()
-
-            for patient, indexs in pateint_wise_info.items():
-
-                for i in indexs:
-
-                    if np.argmax(y_pred[i]) == y_true[i]:
-
-                        continue
-
-                    break
-                else:
-
-                    patient_correct += 1
+            pwa = 1 - (num_patient_wrong / Predictions['PatientID'].unique().__len__())
 
             print(
                 Color.MAGENTA.apply(f"Patient Wise Accuracy: "),
-                color_score(patient_correct / patient_total)(f"{patient_correct / patient_total:.4}")
+                color_score(pwa)(f"{pwa:.4}")
             )
 
     print("Saving...")
 
-    Predictions.to_csv('evaluation.csv' if MODE == 'evaluate' else 'predictions.csv', index=False)
+    Predictions.to_csv('evaluation.ignore.csv' if MODE == 'evaluate' else 'predictions.csv', index=False)
