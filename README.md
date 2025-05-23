@@ -27,6 +27,8 @@ Variables to configure in [main.py](https://github.com/dschlesinger/sammy-predic
 - `DATA_CSV`: Path to the CSV file containing image **labels**, `CC` or `MLO`.
 - `IMAGE_PATH_COL`: Column name in `DATA_CSV` that associates images with entries.
 - `IMAGE_COL_FIND`: Function to match image file names to `IMAGE_PATH_COL` entries.
+- `PATIENT_ID_COL`: Column to extract patient ids from
+- `PATIENT_ID_FUNC`: Function to extract patient ids, for if column is not only patient id, can also refence image file name
 - `VIEW_COL`: Column name in `DATA_CSV` that contains the view labels.
 - `MODE`: Set to `predict` to generate predictions or `evaluate` to print statistics on selected dataset.
 - `EVAL_METRICS`: List of metrics to be evaluated, (default Accuracy, AUC, Crossentropy Loss).
